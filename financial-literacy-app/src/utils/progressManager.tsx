@@ -1,4 +1,5 @@
 import { Course } from '../types/course';
+import { Progress } from '../types/progress';
 
 export const isChapterUnlocked = (
   chapterId: string,
@@ -12,13 +13,20 @@ export const isChapterUnlocked = (
   return previousChapterId ? course.completedChapters.includes(previousChapterId) : false;
 };
 
-export const updateCourseProgress = (
-  course: Course,
-  completedChapterId: string
-): Course => {
-  return {
-    ...course,
-    completedChapters: [...course.completedChapters, completedChapterId],
-    currentChapter: course.chapters[course.chapters.findIndex(ch => ch.id === completedChapterId) + 1]?.id
-  };
+export const updateCourseProgress = (course: Course, chapterId: string): Course => {
+  const updatedCourse = { ...course };
+  const chapterIndex = updatedCourse.chapters.findIndex(ch => ch.id === chapterId);
+
+  if (chapterIndex !== -1) {
+    updatedCourse.chapters[chapterIndex].completed = true;
+    if (!updatedCourse.completedChapters.includes(chapterId)) {
+      updatedCourse.completedChapters.push(chapterId);
+    }
+
+    if (chapterIndex + 1 < updatedCourse.chapters.length) {
+      updatedCourse.chapters[chapterIndex + 1].isLocked = false;
+    }
+  }
+
+  return updatedCourse;
 };

@@ -1,68 +1,128 @@
-import { Progress, VideoProgress, ProgressUpdate } from '../types/progress';
+import { Progress, ChapterProgress, VideoProgress, ProgressUpdate, QuizAttempt } from '../types/progress';
 
 export class ProgressManager {
-  private storageKey = 'course_progress';
+  private readonly STORAGE_KEY = 'course_progress';
 
-  saveProgress(progress: Progress): void {
-    localStorage.setItem(this.storageKey, JSON.stringify(progress));
+  private getStorageKey(courseId: string, userId: string): string {
+    return `${this.STORAGE_KEY}_${courseId}_${userId}`;
   }
 
-  getProgress(courseId: string, userId: string): Progress | null {
-    const stored = localStorage.getItem(this.storageKey);
-    if (!stored) return null;
-    return JSON.parse(stored);
+  private async saveProgress(courseId: string, userId: string, progress: Progress): Promise<void> {
+    localStorage.setItem(this.getStorageKey(courseId, userId), JSON.stringify(progress));
   }
 
-  updateVideoProgress(
+  async getProgress(courseId: string, userId: string): Promise<Progress | null> {
+    const data = localStorage.getItem(this.getStorageKey(courseId, userId));
+    return data ? JSON.parse(data) : null;
+  }
+
+  async getOrCreateProgress(courseId: string, userId: string): Promise<Progress> {
+    const existing = await this.getProgress(courseId, userId);
+    if (existing) return existing;
+
+    const progress: Progress = {
+      courseId,
+      userId,
+      chapters: [],
+      completedChapters: [], // Initialize completedChapters
+      lastAccessed: new Date()
+    };
+    await this.saveProgress(courseId, userId, progress);
+    return progress;
+  }
+
+  async updateVideoProgress(
     courseId: string,
     chapterId: string,
     videoId: string,
     update: ProgressUpdate
-  ): void {
-    const progress = this.getProgress(courseId, 'current_user');
-    if (!progress) return;
+  ): Promise<Progress | null> {
+    const progress = await this.getOrCreateProgress(courseId, 'current_user');
+    const chapter = this.getOrCreateChapter(progress, chapterId);
+    
+    const videoProgress = this.updateOrCreateVideoProgress(chapter, videoId, update);
+    chapter.videoProgress = chapter.videoProgress.map(v => 
+      v.videoId === videoId ? videoProgress : v
+    );
 
-    const chapter = progress.chapters.find(ch => ch.chapterId === chapterId);
-    if (!chapter) return;
-
-    const videoProgress = chapter.videoProgress.find(vp => vp.videoId === videoId);
-    if (videoProgress) {
-      videoProgress.lastPosition = update.position;
-      videoProgress.watched = update.watched;
-      videoProgress.watchedDuration = update.position;
-    } else {
-      chapter.videoProgress.push({
-        videoId,
-        position: update.position,
-        watched: update.watched,
-        lastPosition: update.position,
-        watchedDuration: update.position
-      });
-    }
-
-    this.saveProgress(progress);
+    await this.saveProgress(courseId, 'current_user', progress);
+    return progress;
   }
 
-  updateQuizAttempt(
+  async updateQuizAttempt(
     courseId: string,
     chapterId: string,
     quizId: string,
     score: number,
-    isSimplified: boolean
-  ): void {
-    const progress = this.getProgress(courseId, 'current_user');
-    if (!progress) return;
+    isSimplified: boolean,
+  ): Promise<Progress | null> {
+    const progress = await this.getOrCreateProgress(courseId, 'current_user');
+    const chapter = this.getOrCreateChapter(progress, chapterId);
     
-    const chapter = progress.chapters.find(ch => ch.chapterId === chapterId);
-    if (!chapter) return;
-
-    chapter.quizAttempts.push({
+    const attempt: QuizAttempt = {
+      id: crypto.randomUUID(),
       quizId,
       score,
       timestamp: new Date(),
-      isSimplifiedVersion: isSimplified
-    });
+      isSimplifiedVersion: isSimplified,
+      isCorrect: score >= 70,
+    };
+    
+    chapter.quizAttempts.push(attempt);
+    await this.saveProgress(courseId, 'current_user', progress);
+    
+    return progress;
+  }
 
-    this.saveProgress(progress);
+  getOrCreateChapter(progress: Progress, chapterId: string): ChapterProgress {
+    let chapter = progress.chapters.find(ch => ch.chapterId === chapterId);
+    if (!chapter) {
+      chapter = {
+        chapterId,
+        completed: false,
+        videoProgress: [],
+        quizAttempts: []
+      };
+      progress.chapters.push(chapter);
+    }
+    return chapter;
+  }
+
+  private updateOrCreateVideoProgress(
+    chapter: ChapterProgress,
+    videoId: string,
+    update: ProgressUpdate
+  ): VideoProgress {
+    const existingProgress = chapter.videoProgress.find(v => v.videoId === videoId);
+    const videoProgress: VideoProgress = existingProgress || {
+      videoId,
+      position: 0,
+      watched: false,
+      watchedDuration: 0,
+      lastPosition: 0,
+      watchedPercentage: 0,
+      lastWatched: new Date()
+    };
+
+    videoProgress.position = update.position;
+    videoProgress.lastPosition = update.position;
+    videoProgress.watched = update.watched;
+    videoProgress.watchedDuration = Math.max(
+      videoProgress.watchedDuration,
+      update.position
+    );
+    videoProgress.watchedPercentage = update.watchedPercentage;
+    videoProgress.lastWatched = update.lastWatched;
+
+    return videoProgress;
+  }
+
+  async completeChapter(courseId: string, chapterId: string): Promise<Progress | null> {
+    const progress = await this.getOrCreateProgress(courseId, 'current_user');
+    if (!progress.completedChapters.includes(chapterId)) {
+      progress.completedChapters.push(chapterId);
+    }
+    await this.saveProgress(courseId, 'current_user', progress);
+    return progress;
   }
 }

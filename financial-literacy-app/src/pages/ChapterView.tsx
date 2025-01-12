@@ -14,7 +14,6 @@ import QuizHistory from '../components/progress/QuizHistory';
 import { ProgressManager } from '../services/progressManager';
 import { Progress, ChapterProgress } from '../types/progress';
 
-
 const Container = styled.div`
   padding: 20px;
   max-width: 1000px;
@@ -44,58 +43,80 @@ const ChapterView = () => {
   const navigate = useNavigate();
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
   const [showQuiz, setShowQuiz] = useState(false);
-
   const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
+  const [showSimplifiedVideo, setShowSimplifiedVideo] = useState(false);
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [videoWatched, setVideoWatched] = useState(false);
+  const [isNextEnabled, setIsNextEnabled] = useState(false);
+
   const THRESHOLD_SCORE = 70;
-  
+
   const currentChapter: Chapter | undefined = mockCourse.chapters.find(ch => ch.id === chapterId);
   const currentVideo: Video | undefined = currentChapter?.videos[currentVideoIndex];
 
-  const [showSimplifiedVideo, setShowSimplifiedVideo] = useState(false);
-  const [attemptCount, setAttemptCount] = useState(0);
-
-  const [progress, setProgress] = useState<Progress | null>(null);
   const progressManager = new ProgressManager();
+  const [progress, setProgress] = useState<Progress | null>(null);
 
   useEffect(() => {
-    if (courseId) {
-      const savedProgress = progressManager.getProgress(courseId, 'current_user');
-      setProgress(savedProgress);
-    }
+    const fetchProgress = async () => {
+      if (courseId) {
+        const savedProgress = await progressManager.getProgress(courseId, 'current_user');
+        setProgress(savedProgress);
+      }
+    };
+    fetchProgress();
   }, [courseId]);
 
-  const isNextEnabled = () => {
+  // Check if the "Next" button should be enabled
+  const checkIsNextEnabled = () => {
     if (!currentVideo || !chapterId) return false;
     if (showQuiz) return false;
     if (quizResult?.passed) return true;
-    
-    return progress?.chapters
-      .find(ch => ch.chapterId === chapterId)
-      ?.videoProgress
-      .find(vp => vp.videoId === currentVideo.id)
-      ?.watched || false;
+    return videoWatched; // Ensure video is watched before enabling "Next"
   };
+
+  useEffect(() => {
+    setIsNextEnabled(checkIsNextEnabled());
+  }, [progress, quizResult, videoWatched, currentVideoIndex, showQuiz]);
+
+  useEffect(() => {
+    if (progress && chapterId && currentVideo) {
+      const isWatched = progress.chapters
+        .find(ch => ch.chapterId === chapterId)
+        ?.videoProgress
+        .find(vp => vp.videoId === currentVideo.id)
+        ?.watched || false;
+      setIsNextEnabled(isWatched);
+    }
+  }, [progress, chapterId, currentVideo]);  
 
   if (!currentChapter || !currentVideo) {
     return <div>Chapter or video not found</div>;
   }
 
-  const handleVideoComplete = () => {
+  const handleVideoComplete = async () => {
     if (!courseId || !chapterId || !currentVideo) {
       console.error('Missing required data for video progress update');
       return;
     }
   
-    progressManager.updateVideoProgress(
+    const updatedProgress = await progressManager.updateVideoProgress(
       courseId,
       chapterId,
       currentVideo.id,
       {
         position: 100,
-        watched: true
+        watched: true,
+        watchedDuration: 100,
+        lastPosition: 100,
+        watchedPercentage: 100,
+        lastWatched: new Date()
       }
     );
+    setProgress(updatedProgress);
+    setVideoWatched(true);
     setShowQuiz(true);
+    setIsNextEnabled(true); // Enable "Next" button after watching the video
   };
 
   const getResultComment = (score: number): string => {
@@ -119,8 +140,6 @@ const ChapterView = () => {
   };
 
   const handleContinue = () => {
-    if (!currentChapter) return;
-
     if (currentVideoIndex + 1 < currentChapter.videos.length) {
       setCurrentVideoIndex(prev => prev + 1);
       setShowSimplifiedVideo(false);
@@ -137,17 +156,18 @@ const ChapterView = () => {
 
   const handleRetry = () => {
     if (attemptCount >= 2) {
-      // Show simplified video after 2 failed attempts
-      setShowSimplifiedVideo(true);
+      setShowSimplifiedVideo(true); // Show simplified video after 2 failed attempts
     }
     setShowQuiz(false);
     setQuizResult(null);
   };
 
-
-  if (!currentChapter || !currentVideo) {
-    return <div>Chapter not found</div>;
-  }
+  const calculateProgress = () => {
+    if (!progress || !currentChapter) return 0;
+    const completedChapters = progress.completedChapters.length;
+    const totalChapters = mockCourse.chapters.length;
+    return (completedChapters / totalChapters) * 100;
+  };
 
   return (
     <Container>
@@ -176,7 +196,7 @@ const ChapterView = () => {
         totalSteps={currentChapter?.videos.length || 0}
         onNext={handleContinue}
         onPrevious={() => setCurrentVideoIndex(prev => prev - 1)}
-        isNextEnabled={isNextEnabled()}
+        isNextEnabled={isNextEnabled}  
       />
       
       {quizResult ? (
@@ -196,7 +216,7 @@ const ChapterView = () => {
                 quizzes: []
               } 
             : currentVideo}
-          onComplete={() => setShowQuiz(true)}
+          onComplete={handleVideoComplete}
           isSimplified={showSimplifiedVideo}
           courseId={courseId || ''}
           chapterId={chapterId || ''}
